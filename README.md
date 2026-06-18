@@ -7,7 +7,7 @@ Built a fully browser-based solar simulation tool that lets you visualize the Su
 ---
 
 ## 🚀 Live Demo
-🔗 **[Live Demo](https://your-deployment-link.com)** *(Replace with your Vercel / GitHub Pages link)*
+🔗 **https://faizan-ali999.github.io/SolarObserver/*
 
 ---
 
