@@ -318,14 +318,14 @@
   <div class="panel-section">
     <div class="section-label">Simulation Speed</div>
     <div class="speed-btns">
-      <button class="speed-btn" onclick="setSpeed(1)">1×</button>
-      <button class="speed-btn active" onclick="setSpeed(60)">60×</button>
-      <button class="speed-btn" onclick="setSpeed(300)">300×</button>
-      <button class="speed-btn" onclick="setSpeed(1440)">Day</button>
+      <button class="speed-btn" onclick="setSpeed(1)" title="Real time (1 day = 24 min)">1×</button>
+      <button class="speed-btn" onclick="setSpeed(30)" title="1 day in 48s">30×</button>
+      <button class="speed-btn active" onclick="setSpeed(120)" title="1 day in 12s">120×</button>
+      <button class="speed-btn" onclick="setSpeed(720)" title="1 day in 2s">720×</button>
     </div>
     <div class="slider-wrap" style="margin-top:4px">
-      <div class="slider-header"><div class="field-label">Custom</div><div class="slider-val" id="speed-val">60×</div></div>
-      <input type="range" id="speed-slider" min="1" max="2000" value="60" oninput="setSpeed(parseInt(this.value))"/>
+      <div class="slider-header"><div class="field-label">Custom</div><div class="slider-val" id="speed-val">120&times;</div></div>
+      <input type="range" id="speed-slider" min="1" max="2000" value="120" oninput="setSpeed(parseInt(this.value))"/>
     </div>
   </div>
 </div>
@@ -345,7 +345,7 @@
       <div class="sun-pill noon"><div class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--solar)"></div><span id="pill-noon">—</span></div>
       <div class="sun-pill set"><div class="dot"  style="width:6px;height:6px;border-radius:50%;background:var(--sunset)"></div><span id="pill-set">—</span></div>
     </div>
-    <div style="font-size:11px;color:var(--text-dim)" id="speed-badge">60× speed</div>
+    <div style="font-size:11px;color:var(--text-dim)" id="speed-badge">120&times; speed</div>
   </div>
   <div class="time-track-wrap" style="position:relative">
     <div class="time-track-bg" id="time-track-bg"></div>
@@ -416,7 +416,7 @@ const state = {
   lat:48.8566, lng:2.3522, tz:1,
   date: new Date('2024-06-21T00:00:00Z'),
   minuteOfDay:720,
-  playing:false, speed:60,
+  playing:false, speed:120,
   houseRot:135, panelTilt:15, panelAzimuth:180,
   features:{shadows:true,trajectory:true,heatmap:false,compare:false},
   layers:{panels:true,windows:true,grid:true,compassRose:true},
@@ -859,30 +859,94 @@ function setupOrbitControls(){
 // ═══════════════════════════════════════
 //  SOLAR CALCULATION — correct UTC↔local time handling
 // ═══════════════════════════════════════
-function recalcSolar(){
-  // Always pass UTC noon of the chosen calendar date to getTimes
-  // This ensures correct Julian day rounding regardless of timezone
-  const utcNoon = new Date(state.date.getTime() + 12*3600000);
-  const times = SunCalc.getTimes(utcNoon, state.lat, state.lng);
+// ─────────────────────────────────────────────────────────────
+//  TIME MODEL (single source of truth — read this carefully)
+//
+//  state.date        = Date object whose UTC year/month/day
+//                      equals the LOCAL calendar date the user chose.
+//                      e.g. user picks "2024-06-21" → stored as
+//                      new Date('2024-06-21T00:00:00Z')
+//                      So .getUTCFullYear/Month/Date give the right calendar day.
+//
+//  state.minuteOfDay = LOCAL clock minutes since local midnight (0–1439).
+//                      e.g. 13:30 local = 810.
+//
+//  state.tz          = UTC offset hours, e.g. +5 for PKT.
+//
+//  To get a UTC Date for SunCalc.getPosition at a given local minute:
+//    utc = localMidnight_UTC - tz*3600000 + minuteOfDay*60000
+//    where localMidnight_UTC = state.date  (already UTC midnight of that day)
+//    So: utcMs = state.date.getTime() - tz*3600000 + minuteOfDay*60000
+//
+//  To convert a UTC Date from SunCalc.getTimes → local minutes:
+//    localMin = utcDate.getUTCHours()*60 + utcDate.getUTCMinutes() + tz*60
+//    (wrap result to 0–1439)
+// ─────────────────────────────────────────────────────────────
 
-  // Convert UTC event times to local minutes-of-day
-  function utcToLocalMin(d){
-    if(!d) return null;
-    const utcMin = d.getUTCHours()*60 + d.getUTCMinutes() + d.getUTCSeconds()/60;
-    return ((utcMin + state.tz*60) % 1440 + 1440) % 1440;
+// localMinToUTC: convert local minute-of-day on state.date to UTC Date for SunCalc
+function localMinToUTC(minuteOfDay){
+  // local midnight in UTC = state.date (UTC midnight of that calendar date) - tz hours
+  return new Date(state.date.getTime() - state.tz*3600000 + minuteOfDay*60000);
+}
+
+// getAltAtLocalMin: altitude in degrees for a local minute
+function getAltAtLocalMin(localMin){
+  const pos = SunCalc.getPosition(localMinToUTC(localMin), state.lat, state.lng);
+  return pos.altitude * 180/Math.PI;
+}
+
+// computeSolarTimes: find rise/noon/set by scanning altitude across the full day.
+// Immune to the Julian-day rounding bug in SunCalc.getTimes().
+function computeSolarTimes(){
+  const H0 = -0.833; // horizon dip in degrees (atmospheric refraction)
+  let maxAlt=-99, noonMin=720;
+  let prevAlt = getAltAtLocalMin(0);
+  let riseMin=null, setMin=null;
+
+  for(let m=1; m<1440; m++){
+    const a = getAltAtLocalMin(m);
+    if(a > maxAlt){ maxAlt=a; noonMin=m; }
+
+    // Rising crossing
+    if(prevAlt < H0 && a >= H0 && riseMin===null){
+      let lo=m-1, hi=m;
+      for(let i=0;i<20;i++){ const mid=(lo+hi)/2; getAltAtLocalMin(mid)<H0?lo=mid:hi=mid; }
+      riseMin=(lo+hi)/2;
+    }
+    // Setting crossing (after first rising, past noon)
+    if(prevAlt >= H0 && a < H0 && riseMin!==null && m>600 && setMin===null){
+      let lo=m-1, hi=m;
+      for(let i=0;i<20;i++){ const mid=(lo+hi)/2; getAltAtLocalMin(mid)>=H0?lo=mid:hi=mid; }
+      setMin=(lo+hi)/2;
+    }
+    prevAlt=a;
   }
+  return { riseMin, noonMin, setMin };
+}
 
-  const riseMin = utcToLocalMin(times.sunrise);
-  const setMin  = utcToLocalMin(times.sunset);
-  const noonMin = utcToLocalMin(times.solarNoon);
+// Cache solar times — only recomputed when date/location changes, not every frame
+let solarTimesCache = null;
+let solarTimesCacheKey = '';
 
-  if(riseMin!==null) cachedRise=riseMin;
-  if(setMin !==null) cachedSet=setMin;
-  if(noonMin!==null) cachedNoon=noonMin;
+function getSolarTimes(){
+  const key = state.date.getTime()+'|'+state.lat+'|'+state.lng+'|'+state.tz;
+  if(key !== solarTimesCacheKey){
+    solarTimesCache = computeSolarTimes();
+    solarTimesCacheKey = key;
+    cachedRise = solarTimesCache.riseMin ?? 360;
+    cachedSet  = solarTimesCache.setMin  ?? 1080;
+    cachedNoon = solarTimesCache.noonMin ?? 720;
+    trajNeedsUpdate = true;
+  }
+  return solarTimesCache;
+}
 
-  // Convert local minuteOfDay → UTC for getPosition
-  const utcMs = state.date.getTime() + (state.minuteOfDay - state.tz*60)*60000;
-  const pos = SunCalc.getPosition(new Date(utcMs), state.lat, state.lng);
+function recalcSolar(){
+  // Get accurate solar event times (cached — only recomputed on location/date change)
+  const {riseMin, noonMin, setMin} = getSolarTimes();
+
+  // Get current sun position for current local time
+  const pos = SunCalc.getPosition(localMinToUTC(state.minuteOfDay), state.lat, state.lng);
   currentSunPos = pos;
 
   updateSunPosition(pos);
@@ -958,16 +1022,21 @@ function updateTrajectory(){
   if(!state.features.trajectory) return;
   const pts=[];
   const R=158;
-  for(let m=0;m<1440;m+=5){
-    const utcMs=state.date.getTime()+(m-state.tz*60)*60000;
-    const pos=SunCalc.getPosition(new Date(utcMs),state.lat,state.lng);
-    if(pos.altitude < -0.08) continue;
+  for(let m=0;m<1440;m+=4){
+    const pos=SunCalc.getPosition(localMinToUTC(m), state.lat, state.lng);
+    if(pos.altitude < -0.05) continue;
     const azRad=(pos.azimuth-180)*Math.PI/180;
-    pts.push(new THREE.Vector3(R*Math.cos(pos.altitude)*Math.sin(azRad),R*Math.sin(pos.altitude),R*Math.cos(pos.altitude)*Math.cos(azRad)));
+    pts.push(new THREE.Vector3(
+      R*Math.cos(pos.altitude)*Math.sin(azRad),
+      R*Math.sin(pos.altitude),
+      R*Math.cos(pos.altitude)*Math.cos(azRad)
+    ));
   }
   if(pts.length<2) return;
-  const geo=new THREE.BufferGeometry().setFromPoints(pts);
-  trajLine=new THREE.Line(geo,new THREE.LineBasicMaterial({color:0xF5A623,opacity:0.75,transparent:true}));
+  trajLine=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({color:0xF5A623,opacity:0.8,transparent:true,linewidth:2})
+  );
   scene.add(trajLine);
 }
 
@@ -976,19 +1045,27 @@ function updateCompareLines(){
   while(grp.children.length) grp.remove(grp.children[0]);
   if(!state.features.compare) return;
   state.compareDates.forEach(cd=>{
-    const cDate=new Date(cd.date+'T00:00:00Z');
+    const cDateUTCMidnight=new Date(cd.date+'T00:00:00Z');
     const pts=[];
-    const R=155;
-    for(let m=0;m<1440;m+=8){
-      const utcMs=cDate.getTime()+(m-state.tz*60)*60000;
-      const pos=SunCalc.getPosition(new Date(utcMs),state.lat,state.lng);
-      if(pos.altitude < -0.08) continue;
+    const R=152;
+    for(let m=0;m<1440;m+=6){
+      // same formula: local minute on that date → UTC
+      const utc=new Date(cDateUTCMidnight.getTime() - state.tz*3600000 + m*60000);
+      const pos=SunCalc.getPosition(utc, state.lat, state.lng);
+      if(pos.altitude < -0.05) continue;
       const azRad=(pos.azimuth-180)*Math.PI/180;
-      pts.push(new THREE.Vector3(R*Math.cos(pos.altitude)*Math.sin(azRad),R*Math.sin(pos.altitude),R*Math.cos(pos.altitude)*Math.cos(azRad)));
+      pts.push(new THREE.Vector3(
+        R*Math.cos(pos.altitude)*Math.sin(azRad),
+        R*Math.sin(pos.altitude),
+        R*Math.cos(pos.altitude)*Math.cos(azRad)
+      ));
     }
     if(pts.length<2) return;
     const col=parseInt(cd.color.replace('#',''),16);
-    grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:col,opacity:0.5,transparent:true})));
+    grp.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({color:col,opacity:0.55,transparent:true})
+    ));
   });
 }
 
@@ -1153,19 +1230,22 @@ function getOrientAdvice(a){
 //  ANIMATION LOOP
 // ═══════════════════════════════════════
 let lastTS=0;
-let trajNeedsUpdate=false; // only rebuild trajectory when date/location changes, not every frame
+let trajNeedsUpdate=true;
 
 function animate(ts=0){
   requestAnimationFrame(animate);
-  const dt=Math.min((ts-lastTS)/1000, 0.1); lastTS=ts;
+  // Clamp dt to 50ms max — prevents huge jumps if tab was hidden
+  const dt=Math.min((ts-lastTS)/1000, 0.05);
+  lastTS=ts;
 
   if(state.playing){
-    // speed=1  → real time (1 minute per 60 real seconds)
-    // speed=60 → 1 minute of sim per 1 real second → full day in 24 real seconds
-    // Formula: minuteOfDay advances by (speed * dt / 60) minutes per frame
-    // dt is seconds elapsed, /60 converts to minutes, ×speed applies multiplier
-    // At speed=1: 0.016s × 1 / 60 = 0.000267 min/frame × 60fps = 0.016 min/s = 1 real min/60s ✓
-    state.minuteOfDay = (state.minuteOfDay + state.speed * dt / 60) % 1440;
+    // speed=1   → real time (1 sim-minute per real minute)
+    // speed=120 → 1 sim-minute per 0.5 real seconds → full 24h day in 12 real seconds
+    // speed = simulation minutes advanced per real second
+    // e.g. speed=60: 60 sim-min/s → full 24h day completes in 1440/60 = 24 real seconds
+    //      speed=1:  1 sim-min/s  → real time (1 day = 24 real minutes)
+    //      speed=720: 1 full day in 2 real seconds
+    state.minuteOfDay = (state.minuteOfDay + state.speed * dt + 1440) % 1440;
     document.getElementById('time-track').value = state.minuteOfDay;
     recalcSolar();
   }
@@ -1191,7 +1271,7 @@ function setSpeed(s){
   document.getElementById('speed-badge').textContent=s+'× speed';
   document.getElementById('speed-slider').value=Math.min(s,2000);
   document.querySelectorAll('.speed-btn').forEach(b=>b.classList.remove('active'));
-  [{1:0},{60:1},{300:2},{1440:3}].forEach(m=>{ const k=Object.keys(m)[0]; if(parseInt(k)===s) document.querySelectorAll('.speed-btn')[m[k]].classList.add('active'); });
+  [{1:0},{30:1},{120:2},{720:3}].forEach(m=>{ const k=Object.keys(m)[0]; if(parseInt(k)===s) document.querySelectorAll('.speed-btn')[m[k]].classList.add('active'); });
 }
 function toggleFeature(feat,btn){
   state.features[feat]=!state.features[feat];
@@ -1238,6 +1318,7 @@ function applyLocation(){
   state.tz=parseFloat(document.getElementById('tz-input').value);
   const dStr=document.getElementById('date-input').value;
   state.date=new Date(dStr+'T00:00:00Z');
+  solarTimesCacheKey='';
   trajNeedsUpdate=true;
   recalcSolar();
 }
@@ -1297,6 +1378,7 @@ document.getElementById('address-search').addEventListener('keydown',async e=>{
 
 document.getElementById('date-input').addEventListener('change',e=>{
   state.date=new Date(e.target.value+'T00:00:00Z');
+  solarTimesCacheKey='';
   trajNeedsUpdate=true;
   recalcSolar();
 });
