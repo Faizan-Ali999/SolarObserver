@@ -57,7 +57,7 @@ Most solar tools are either oversimplified 2D diagrams or expensive desktop soft
 This is a **single HTML file with no build step.** Just clone and open.
 
 ```bash
-git clone https://github.com/yourusername/SolarObserver.git
+git clone https://github.com/Faizan-Ali999/SolarObserver.git
 cd SolarObserver
 ```
 
