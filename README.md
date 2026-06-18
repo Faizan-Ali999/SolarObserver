@@ -7,7 +7,7 @@ Built a fully browser-based solar simulation tool that lets you visualize the Su
 ---
 
 ## 🚀 Live Demo
-🔗 **https://faizan-ali999.github.io/SolarObserver/*
+🔗 **https://faizan-ali999.github.io/SolarObserver/**
 
 ---
 
