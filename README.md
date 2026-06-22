@@ -5,6 +5,7 @@ Built a fully browser-based solar simulation tool that lets you visualize the Su
 **No backend. No installation. Just open and simulate.**
 
 ---
+<img width="800" height="450" alt="SolarObserver-Sample" src="https://github.com/user-attachments/assets/14fcfa75-4f71-4eee-8785-f0358d1bb7eb" />
 
 ## 🚀 Live Demo
 🔗 **https://faizan-ali999.github.io/SolarObserver/**
