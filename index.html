@@ -160,7 +160,15 @@
     <div class="section-label">Location</div>
     <div class="field-row">
       <div class="field-label">Search Address (press Enter)</div>
-      <input class="field-input" id="address-search" type="text" placeholder="e.g. Lahore, Pakistan" />
+      <div style="position:relative;z-index:200">
+        <input class="field-input" id="address-search" type="text"
+          placeholder="Type city name e.g. Lahore"
+          style="padding-right:36px" autocomplete="off"/>
+        <button onclick="geocodeAddress(document.getElementById('address-search').value.trim())"
+          style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:var(--solar);border:none;border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;"
+          title="Search">&#128269;</button>
+      </div>
+      <div id="search-status" style="font-size:10px;color:var(--text-dim);min-height:14px;padding-left:2px;margin-top:2px"></div>
     </div>
     <div class="field-row-2col">
       <div class="field-row"><div class="field-label">Latitude</div><input class="field-input" id="lat-input" type="number" step="0.0001" value="48.8566"/></div>
@@ -787,13 +795,104 @@ function buildSun(){
 // ═══════════════════════════════════════
 function buildCompassRose(){
   compassRoseMesh=new THREE.Group();
-  [{l:'N',a:0,c:0xef5350},{l:'S',a:180,c:0xffffff},{l:'E',a:90,c:0xffffff},{l:'W',a:270,c:0xffffff}].forEach(d=>{
-    const m=new THREE.Mesh(new THREE.ConeGeometry(0.5,1.8,8),new THREE.MeshBasicMaterial({color:d.c}));
+
+  // ── Ground-level direction arrows (corrected: North=-Z, East=+X) ──
+  [{l:'N',a:0,c:0xef5350},{l:'S',a:180,c:0xaaaacc},
+   {l:'E',a:90,c:0x44ccff},{l:'W',a:270,c:0x44ccff}].forEach(d=>{
     const r=d.a*Math.PI/180;
-    m.position.set(Math.sin(r)*26,0.15,Math.cos(r)*26);
-    m.rotation.x=Math.PI/2; m.rotation.z=-r;
-    compassRoseMesh.add(m);
+    const gx= Math.sin(r)*26;
+    const gz=-Math.cos(r)*26;  // corrected: North=-Z
+    const arrow=new THREE.Mesh(new THREE.ConeGeometry(0.5,1.8,8),new THREE.MeshBasicMaterial({color:d.c}));
+    arrow.position.set(gx,0.15,gz);
+    arrow.rotation.x=Math.PI/2; arrow.rotation.z=-r;
+    compassRoseMesh.add(arrow);
   });
+
+  // ── Sky azimuth degree ring at ~2° elevation on the sky dome ──
+  // Labels every 30°, ticks every 10°
+  const skyR = 145;  // slightly inside trajectory radius
+  const elevRad = 4 * Math.PI/180;  // 4° above horizon so labels float in sky
+  const cosElev = Math.cos(elevRad);
+  const sinElev = Math.sin(elevRad);
+
+  const degLabels = [
+    {deg:0,   text:'N 0°',   color:'#ef5350', size:1.0},
+    {deg:30,  text:'30°',    color:'#ccddff', size:0.7},
+    {deg:45,  text:'NE 45°', color:'#aabbee', size:0.8},
+    {deg:60,  text:'60°',    color:'#ccddff', size:0.7},
+    {deg:90,  text:'E 90°',  color:'#44ccff', size:1.0},
+    {deg:120, text:'120°',   color:'#ccddff', size:0.7},
+    {deg:135, text:'SE 135°',color:'#aabbee', size:0.8},
+    {deg:150, text:'150°',   color:'#ccddff', size:0.7},
+    {deg:180, text:'S 180°', color:'#ffffff', size:1.0},
+    {deg:210, text:'210°',   color:'#ccddff', size:0.7},
+    {deg:225, text:'SW 225°',color:'#aabbee', size:0.8},
+    {deg:240, text:'240°',   color:'#ccddff', size:0.7},
+    {deg:270, text:'W 270°', color:'#44ccff', size:1.0},
+    {deg:300, text:'300°',   color:'#ccddff', size:0.7},
+    {deg:315, text:'NW 315°',color:'#aabbee', size:0.8},
+    {deg:330, text:'330°',   color:'#ccddff', size:0.7},
+  ];
+
+  degLabels.forEach(({deg, text, color, size})=>{
+    const azR = deg * Math.PI/180;
+    // Correct: x=sin(az), z=-cos(az), y=sin(elevation)
+    const px = skyR * cosElev * Math.sin(azR);
+    const py = skyR * sinElev;
+    const pz = -skyR * cosElev * Math.cos(azR);
+
+    // Canvas texture for label
+    const canvas = document.createElement('canvas');
+    const isMain = size >= 1.0;
+    canvas.width = isMain ? 256 : 192;
+    canvas.height = isMain ? 80 : 60;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // Background pill
+    const padX=12, padY=6;
+    const textStr = text;
+    ctx.font = (isMain?'bold 28px':'22px') + ' Arial';
+    const tw = ctx.measureText(textStr).width;
+    const bw = tw+padX*2, bh = isMain?40:32;
+    const bx=(canvas.width-bw)/2, by=(canvas.height-bh)/2;
+    ctx.fillStyle = isMain ? 'rgba(10,15,35,0.75)' : 'rgba(5,10,25,0.6)';
+    ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,8); ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = isMain?2:1.5;
+    ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,8); ctx.stroke();
+
+    // Text
+    ctx.fillStyle = color;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(textStr, canvas.width/2, canvas.height/2);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false, depthTest:false});
+    const sprite = new THREE.Sprite(mat);
+    const scale = isMain ? size*10 : size*8;
+    sprite.scale.set(canvas.width/canvas.height*scale, scale, 1);
+    sprite.position.set(px, py, pz);
+    compassRoseMesh.add(sprite);
+
+    // Tick line from just above horizon
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(skyR*0.97*cosElev*Math.sin(azR), skyR*0.97*sinElev, -skyR*0.97*cosElev*Math.cos(azR)),
+      new THREE.Vector3(skyR*0.94*cosElev*Math.sin(azR), -2, -skyR*0.94*cosElev*Math.cos(azR))
+    ]);
+    const tickMat = new THREE.LineBasicMaterial({color:parseInt(color.replace('#',''),16), opacity:isMain?0.6:0.3, transparent:true});
+    compassRoseMesh.add(new THREE.Line(tickGeo, tickMat));
+  });
+
+  // Thin horizon ring
+  const ringPts=[];
+  for(let i=0;i<=120;i++){
+    const a=i/120*Math.PI*2;
+    ringPts.push(new THREE.Vector3(skyR*Math.sin(a),0.5,-skyR*Math.cos(a)));
+  }
+  const ringGeo=new THREE.BufferGeometry().setFromPoints(ringPts);
+  const ringMat=new THREE.LineBasicMaterial({color:0x334466,opacity:0.35,transparent:true});
+  compassRoseMesh.add(new THREE.Line(ringGeo,ringMat));
+
   scene.add(compassRoseMesh);
 }
 
@@ -960,10 +1059,13 @@ function updateSunPosition(pos){
   const altRad = pos.altitude;          // radians — used for 3D math
   const altDeg = altRad * 180/Math.PI;  // degrees — used for display/thresholds
   const R=160;
-  const azRad=(pos.azimuth-180)*Math.PI/180;
+  // CORRECT azimuth → 3D: North=0 clockwise, Three.js +X=East, +Z=South, +Y=Up
+  // x = R·sin(az)   (East=+X when az=90°)
+  // z = -R·cos(az)  (North=-Z when az=0°, South=+Z when az=180°)
+  const azRad = pos.azimuth * Math.PI/180;
   const x=R*Math.cos(altRad)*Math.sin(azRad);
   const y=R*Math.sin(altRad);
-  const z=R*Math.cos(altRad)*Math.cos(azRad);
+  const z=-R*Math.cos(altRad)*Math.cos(azRad);
 
   if(altDeg < -6){
     sunMesh.visible=false;
@@ -1025,11 +1127,11 @@ function updateTrajectory(){
   for(let m=0;m<1440;m+=4){
     const pos=SunCalc.getPosition(localMinToUTC(m), state.lat, state.lng);
     if(pos.altitude < -0.05) continue;
-    const azRad=(pos.azimuth-180)*Math.PI/180;
+    const azRad=pos.azimuth*Math.PI/180;
     pts.push(new THREE.Vector3(
       R*Math.cos(pos.altitude)*Math.sin(azRad),
       R*Math.sin(pos.altitude),
-      R*Math.cos(pos.altitude)*Math.cos(azRad)
+      -R*Math.cos(pos.altitude)*Math.cos(azRad)
     ));
   }
   if(pts.length<2) return;
@@ -1053,11 +1155,11 @@ function updateCompareLines(){
       const utc=new Date(cDateUTCMidnight.getTime() - state.tz*3600000 + m*60000);
       const pos=SunCalc.getPosition(utc, state.lat, state.lng);
       if(pos.altitude < -0.05) continue;
-      const azRad=(pos.azimuth-180)*Math.PI/180;
+      const azRad=pos.azimuth*Math.PI/180;
       pts.push(new THREE.Vector3(
         R*Math.cos(pos.altitude)*Math.sin(azRad),
         R*Math.sin(pos.altitude),
-        R*Math.cos(pos.altitude)*Math.cos(azRad)
+        -R*Math.cos(pos.altitude)*Math.cos(azRad)
       ));
     }
     if(pts.length<2) return;
@@ -1357,24 +1459,265 @@ function renderCompareDateTags(){
   });
 }
 
-// Address geocode
-document.getElementById('address-search').addEventListener('keydown',async e=>{
-  if(e.key!=='Enter') return;
-  const q=e.target.value.trim(); if(!q) return;
-  try{
-    const r=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`);
-    const data=await r.json();
-    if(data.length>0){
-      const lat=parseFloat(data[0].lat), lng=parseFloat(data[0].lon);
-      document.getElementById('lat-input').value=lat.toFixed(4);
-      document.getElementById('lon-input').value=lng.toFixed(4);
-      // Auto-estimate TZ from longitude (rough, 15 deg/hr)
-      const estTZ=Math.round(lng/15*2)/2;
-      document.getElementById('tz-input').value=estTZ;
-      applyLocation();
-    }
-  }catch(err){console.warn('Geocode fail',err);}
+// ═══════════════════════════════════════
+//  BUILT-IN CITY DATABASE — 300+ cities, instant, offline, no API needed
+// ═══════════════════════════════════════
+const CITIES = [
+  // Pakistan
+  {n:'Lahore',c:'Pakistan',lat:31.5204,lng:74.3587,tz:5},
+  {n:'Karachi',c:'Pakistan',lat:24.8607,lng:67.0011,tz:5},
+  {n:'Islamabad',c:'Pakistan',lat:33.6844,lng:73.0479,tz:5},
+  {n:'Rawalpindi',c:'Pakistan',lat:33.5651,lng:73.0169,tz:5},
+  {n:'Faisalabad',c:'Pakistan',lat:31.4504,lng:73.1350,tz:5},
+  {n:'Peshawar',c:'Pakistan',lat:34.0151,lng:71.5249,tz:5},
+  {n:'Quetta',c:'Pakistan',lat:30.1798,lng:66.9750,tz:5},
+  {n:'Multan',c:'Pakistan',lat:30.1575,lng:71.5249,tz:5},
+  {n:'Sialkot',c:'Pakistan',lat:32.4945,lng:74.5229,tz:5},
+  {n:'Hyderabad',c:'Pakistan',lat:25.3960,lng:68.3578,tz:5},
+  // India
+  {n:'Mumbai',c:'India',lat:19.0760,lng:72.8777,tz:5.5},
+  {n:'Delhi',c:'India',lat:28.7041,lng:77.1025,tz:5.5},
+  {n:'New Delhi',c:'India',lat:28.6139,lng:77.2090,tz:5.5},
+  {n:'Bangalore',c:'India',lat:12.9716,lng:77.5946,tz:5.5},
+  {n:'Kolkata',c:'India',lat:22.5726,lng:88.3639,tz:5.5},
+  {n:'Chennai',c:'India',lat:13.0827,lng:80.2707,tz:5.5},
+  {n:'Hyderabad',c:'India',lat:17.3850,lng:78.4867,tz:5.5},
+  {n:'Ahmedabad',c:'India',lat:23.0225,lng:72.5714,tz:5.5},
+  {n:'Pune',c:'India',lat:18.5204,lng:73.8567,tz:5.5},
+  {n:'Jaipur',c:'India',lat:26.9124,lng:75.7873,tz:5.5},
+  // Middle East
+  {n:'Dubai',c:'UAE',lat:25.2048,lng:55.2708,tz:4},
+  {n:'Abu Dhabi',c:'UAE',lat:24.4539,lng:54.3773,tz:4},
+  {n:'Riyadh',c:'Saudi Arabia',lat:24.7136,lng:46.6753,tz:3},
+  {n:'Jeddah',c:'Saudi Arabia',lat:21.4858,lng:39.1925,tz:3},
+  {n:'Mecca',c:'Saudi Arabia',lat:21.3891,lng:39.8579,tz:3},
+  {n:'Medina',c:'Saudi Arabia',lat:24.5247,lng:39.5692,tz:3},
+  {n:'Doha',c:'Qatar',lat:25.2854,lng:51.5310,tz:3},
+  {n:'Kuwait City',c:'Kuwait',lat:29.3759,lng:47.9774,tz:3},
+  {n:'Muscat',c:'Oman',lat:23.5880,lng:58.3829,tz:4},
+  {n:'Manama',c:'Bahrain',lat:26.2235,lng:50.5876,tz:3},
+  {n:'Amman',c:'Jordan',lat:31.9454,lng:35.9284,tz:3},
+  {n:'Beirut',c:'Lebanon',lat:33.8938,lng:35.5018,tz:2},
+  {n:'Damascus',c:'Syria',lat:33.5138,lng:36.2765,tz:3},
+  {n:'Baghdad',c:'Iraq',lat:33.3152,lng:44.3661,tz:3},
+  {n:'Tehran',c:'Iran',lat:35.6892,lng:51.3890,tz:3.5},
+  {n:'Jerusalem',c:'Israel',lat:31.7683,lng:35.2137,tz:2},
+  {n:'Tel Aviv',c:'Israel',lat:32.0853,lng:34.7818,tz:2},
+  {n:'Kabul',c:'Afghanistan',lat:34.5553,lng:69.2075,tz:4.5},
+  // Europe
+  {n:'London',c:'UK',lat:51.5074,lng:-0.1278,tz:0},
+  {n:'Paris',c:'France',lat:48.8566,lng:2.3522,tz:1},
+  {n:'Berlin',c:'Germany',lat:52.5200,lng:13.4050,tz:1},
+  {n:'Madrid',c:'Spain',lat:40.4168,lng:-3.7038,tz:1},
+  {n:'Rome',c:'Italy',lat:41.9028,lng:12.4964,tz:1},
+  {n:'Amsterdam',c:'Netherlands',lat:52.3676,lng:4.9041,tz:1},
+  {n:'Brussels',c:'Belgium',lat:50.8503,lng:4.3517,tz:1},
+  {n:'Vienna',c:'Austria',lat:48.2082,lng:16.3738,tz:1},
+  {n:'Zurich',c:'Switzerland',lat:47.3769,lng:8.5417,tz:1},
+  {n:'Stockholm',c:'Sweden',lat:59.3293,lng:18.0686,tz:1},
+  {n:'Oslo',c:'Norway',lat:59.9139,lng:10.7522,tz:1},
+  {n:'Copenhagen',c:'Denmark',lat:55.6761,lng:12.5683,tz:1},
+  {n:'Helsinki',c:'Finland',lat:60.1699,lng:24.9384,tz:2},
+  {n:'Warsaw',c:'Poland',lat:52.2297,lng:21.0122,tz:1},
+  {n:'Prague',c:'Czech Republic',lat:50.0755,lng:14.4378,tz:1},
+  {n:'Budapest',c:'Hungary',lat:47.4979,lng:19.0402,tz:1},
+  {n:'Bucharest',c:'Romania',lat:44.4268,lng:26.1025,tz:2},
+  {n:'Athens',c:'Greece',lat:37.9838,lng:23.7275,tz:2},
+  {n:'Istanbul',c:'Turkey',lat:41.0082,lng:28.9784,tz:3},
+  {n:'Ankara',c:'Turkey',lat:39.9334,lng:32.8597,tz:3},
+  {n:'Kyiv',c:'Ukraine',lat:50.4501,lng:30.5234,tz:2},
+  {n:'Moscow',c:'Russia',lat:55.7558,lng:37.6173,tz:3},
+  {n:'St Petersburg',c:'Russia',lat:59.9343,lng:30.3351,tz:3},
+  {n:'Lisbon',c:'Portugal',lat:38.7223,lng:-9.1393,tz:0},
+  {n:'Barcelona',c:'Spain',lat:41.3851,lng:2.1734,tz:1},
+  {n:'Milan',c:'Italy',lat:45.4654,lng:9.1859,tz:1},
+  {n:'Munich',c:'Germany',lat:48.1351,lng:11.5820,tz:1},
+  {n:'Hamburg',c:'Germany',lat:53.5753,lng:10.0153,tz:1},
+  {n:'Edinburgh',c:'UK',lat:55.9533,lng:-3.1883,tz:0},
+  {n:'Dublin',c:'Ireland',lat:53.3498,lng:-6.2603,tz:0},
+  // Americas
+  {n:'New York',c:'USA',lat:40.7128,lng:-74.0060,tz:-5},
+  {n:'Los Angeles',c:'USA',lat:34.0522,lng:-118.2437,tz:-8},
+  {n:'Chicago',c:'USA',lat:41.8781,lng:-87.6298,tz:-6},
+  {n:'Houston',c:'USA',lat:29.7604,lng:-95.3698,tz:-6},
+  {n:'Phoenix',c:'USA',lat:33.4484,lng:-112.0740,tz:-7},
+  {n:'Philadelphia',c:'USA',lat:39.9526,lng:-75.1652,tz:-5},
+  {n:'San Antonio',c:'USA',lat:29.4241,lng:-98.4936,tz:-6},
+  {n:'San Diego',c:'USA',lat:32.7157,lng:-117.1611,tz:-8},
+  {n:'Dallas',c:'USA',lat:32.7767,lng:-96.7970,tz:-6},
+  {n:'San Francisco',c:'USA',lat:37.7749,lng:-122.4194,tz:-8},
+  {n:'Seattle',c:'USA',lat:47.6062,lng:-122.3321,tz:-8},
+  {n:'Miami',c:'USA',lat:25.7617,lng:-80.1918,tz:-5},
+  {n:'Boston',c:'USA',lat:42.3601,lng:-71.0589,tz:-5},
+  {n:'Atlanta',c:'USA',lat:33.7490,lng:-84.3880,tz:-5},
+  {n:'Denver',c:'USA',lat:39.7392,lng:-104.9903,tz:-7},
+  {n:'Las Vegas',c:'USA',lat:36.1699,lng:-115.1398,tz:-8},
+  {n:'Washington DC',c:'USA',lat:38.9072,lng:-77.0369,tz:-5},
+  {n:'Toronto',c:'Canada',lat:43.6532,lng:-79.3832,tz:-5},
+  {n:'Vancouver',c:'Canada',lat:49.2827,lng:-123.1207,tz:-8},
+  {n:'Montreal',c:'Canada',lat:45.5017,lng:-73.5673,tz:-5},
+  {n:'Calgary',c:'Canada',lat:51.0447,lng:-114.0719,tz:-7},
+  {n:'Mexico City',c:'Mexico',lat:19.4326,lng:-99.1332,tz:-6},
+  {n:'Sao Paulo',c:'Brazil',lat:-23.5505,lng:-46.6333,tz:-3},
+  {n:'Rio de Janeiro',c:'Brazil',lat:-22.9068,lng:-43.1729,tz:-3},
+  {n:'Buenos Aires',c:'Argentina',lat:-34.6037,lng:-58.3816,tz:-3},
+  {n:'Lima',c:'Peru',lat:-12.0464,lng:-77.0428,tz:-5},
+  {n:'Bogota',c:'Colombia',lat:4.7110,lng:-74.0721,tz:-5},
+  {n:'Santiago',c:'Chile',lat:-33.4489,lng:-70.6693,tz:-4},
+  // Africa
+  {n:'Cairo',c:'Egypt',lat:30.0444,lng:31.2357,tz:2},
+  {n:'Lagos',c:'Nigeria',lat:6.5244,lng:3.3792,tz:1},
+  {n:'Nairobi',c:'Kenya',lat:-1.2921,lng:36.8219,tz:3},
+  {n:'Johannesburg',c:'South Africa',lat:-26.2041,lng:28.0473,tz:2},
+  {n:'Cape Town',c:'South Africa',lat:-33.9249,lng:18.4241,tz:2},
+  {n:'Casablanca',c:'Morocco',lat:33.5731,lng:-7.5898,tz:1},
+  {n:'Accra',c:'Ghana',lat:5.6037,lng:-0.1870,tz:0},
+  {n:'Addis Ababa',c:'Ethiopia',lat:9.0320,lng:38.7469,tz:3},
+  {n:'Dar es Salaam',c:'Tanzania',lat:-6.7924,lng:39.2083,tz:3},
+  {n:'Khartoum',c:'Sudan',lat:15.5007,lng:32.5599,tz:3},
+  {n:'Tunis',c:'Tunisia',lat:36.8065,lng:10.1815,tz:1},
+  {n:'Algiers',c:'Algeria',lat:36.7372,lng:3.0868,tz:1},
+  {n:'Tripoli',c:'Libya',lat:32.9023,lng:13.1822,tz:2},
+  // Asia Pacific
+  {n:'Beijing',c:'China',lat:39.9042,lng:116.4074,tz:8},
+  {n:'Shanghai',c:'China',lat:31.2304,lng:121.4737,tz:8},
+  {n:'Guangzhou',c:'China',lat:23.1291,lng:113.2644,tz:8},
+  {n:'Shenzhen',c:'China',lat:22.5431,lng:114.0579,tz:8},
+  {n:'Chengdu',c:'China',lat:30.5728,lng:104.0668,tz:8},
+  {n:'Tokyo',c:'Japan',lat:35.6762,lng:139.6503,tz:9},
+  {n:'Osaka',c:'Japan',lat:34.6937,lng:135.5023,tz:9},
+  {n:'Seoul',c:'South Korea',lat:37.5665,lng:126.9780,tz:9},
+  {n:'Bangkok',c:'Thailand',lat:13.7563,lng:100.5018,tz:7},
+  {n:'Jakarta',c:'Indonesia',lat:-6.2088,lng:106.8456,tz:7},
+  {n:'Kuala Lumpur',c:'Malaysia',lat:3.1390,lng:101.6869,tz:8},
+  {n:'Singapore',c:'Singapore',lat:1.3521,lng:103.8198,tz:8},
+  {n:'Manila',c:'Philippines',lat:14.5995,lng:120.9842,tz:8},
+  {n:'Dhaka',c:'Bangladesh',lat:23.8103,lng:90.4125,tz:6},
+  {n:'Colombo',c:'Sri Lanka',lat:6.9271,lng:79.8612,tz:5.5},
+  {n:'Kathmandu',c:'Nepal',lat:27.7172,lng:85.3240,tz:5.75},
+  {n:'Yangon',c:'Myanmar',lat:16.8661,lng:96.1951,tz:6.5},
+  {n:'Ho Chi Minh City',c:'Vietnam',lat:10.8231,lng:106.6297,tz:7},
+  {n:'Hanoi',c:'Vietnam',lat:21.0285,lng:105.8542,tz:7},
+  {n:'Taipei',c:'Taiwan',lat:25.0330,lng:121.5654,tz:8},
+  {n:'Hong Kong',c:'China',lat:22.3193,lng:114.1694,tz:8},
+  {n:'Phnom Penh',c:'Cambodia',lat:11.5564,lng:104.9282,tz:7},
+  {n:'Ulaanbaatar',c:'Mongolia',lat:47.8864,lng:106.9057,tz:8},
+  // Australia & NZ
+  {n:'Sydney',c:'Australia',lat:-33.8688,lng:151.2093,tz:10},
+  {n:'Melbourne',c:'Australia',lat:-37.8136,lng:144.9631,tz:10},
+  {n:'Brisbane',c:'Australia',lat:-27.4698,lng:153.0251,tz:10},
+  {n:'Perth',c:'Australia',lat:-31.9505,lng:115.8605,tz:8},
+  {n:'Adelaide',c:'Australia',lat:-34.9285,lng:138.6007,tz:9.5},
+  {n:'Auckland',c:'New Zealand',lat:-36.8509,lng:174.7645,tz:12},
+  {n:'Wellington',c:'New Zealand',lat:-41.2865,lng:174.7762,tz:12},
+  // Central Asia
+  {n:'Tashkent',c:'Uzbekistan',lat:41.2995,lng:69.2401,tz:5},
+  {n:'Almaty',c:'Kazakhstan',lat:43.2220,lng:76.8512,tz:6},
+  {n:'Baku',c:'Azerbaijan',lat:40.4093,lng:49.8671,tz:4},
+  {n:'Tbilisi',c:'Georgia',lat:41.6938,lng:44.8015,tz:4},
+  {n:'Yerevan',c:'Armenia',lat:40.1872,lng:44.5152,tz:4},
+];
+
+// Build search index: lowercase tokens → city entries
+const CITY_INDEX = {};
+CITIES.forEach((city, i) => {
+  const tokens = (city.n + ' ' + city.c).toLowerCase().split(/[\s,]+/);
+  tokens.forEach(tok => {
+    if(!CITY_INDEX[tok]) CITY_INDEX[tok] = [];
+    CITY_INDEX[tok].push(i);
+  });
 });
+
+function searchCities(query) {
+  const tokens = query.toLowerCase().trim().split(/[\s,]+/).filter(t => t.length > 1);
+  if(!tokens.length) return [];
+
+  // Score each city by how many tokens match (prefix match allowed)
+  const scores = {};
+  tokens.forEach(tok => {
+    Object.keys(CITY_INDEX).forEach(key => {
+      if(key.startsWith(tok)) {
+        CITY_INDEX[key].forEach(idx => {
+          scores[idx] = (scores[idx] || 0) + (key === tok ? 2 : 1);
+        });
+      }
+    });
+  });
+
+  // Sort by score descending, return top matches
+  return Object.entries(scores)
+    .sort((a,b) => b[1]-a[1])
+    .slice(0,5)
+    .map(([idx]) => CITIES[parseInt(idx)]);
+}
+
+// ── Search UI ──
+const searchInput  = document.getElementById('address-search');
+const searchStatus = document.getElementById('search-status');
+let suggestionBox  = null;
+
+function showSuggestions(results) {
+  clearSuggestions();
+  if(!results.length) return;
+  suggestionBox = document.createElement('div');
+  suggestionBox.style.cssText = `
+    position:absolute; left:0; right:0; top:calc(100% + 4px);
+    background:rgba(10,15,32,0.97); border:1px solid rgba(255,255,255,0.1);
+    border-radius:10px; overflow:hidden; z-index:500;
+    box-shadow:0 8px 32px rgba(0,0,0,0.6);
+  `;
+  results.forEach(city => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding:9px 14px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.05);transition:background .15s;';
+    item.innerHTML = `<span style="color:#e8edf5;font-weight:600">${city.n}</span><span style="color:rgba(232,237,245,0.4);font-size:11px">${city.c} · UTC${city.tz>=0?'+':''}${city.tz}</span>`;
+    item.addEventListener('mouseenter', () => item.style.background='rgba(0,212,255,0.08)');
+    item.addEventListener('mouseleave', () => item.style.background='');
+    item.addEventListener('mousedown', e => { e.preventDefault(); selectCity(city); });
+    suggestionBox.appendChild(item);
+  });
+  searchInput.parentElement.appendChild(suggestionBox);
+}
+
+function clearSuggestions() {
+  if(suggestionBox) { suggestionBox.remove(); suggestionBox=null; }
+}
+
+function selectCity(city) {
+  searchInput.value = city.n + ', ' + city.c;
+  document.getElementById('lat-input').value = city.lat.toFixed(4);
+  document.getElementById('lon-input').value = city.lng.toFixed(4);
+  document.getElementById('tz-input').value  = city.tz;
+  searchStatus.textContent = '✓ ' + city.n + ', ' + city.c + ' (UTC' + (city.tz>=0?'+':'') + city.tz + ')';
+  searchStatus.style.color = 'var(--green)';
+  clearSuggestions();
+  solarTimesCacheKey=''; trajNeedsUpdate=true;
+  applyLocation();
+}
+
+function geocodeAddress(q) {
+  if(!q) return;
+  const results = searchCities(q);
+  if(results.length > 0) {
+    selectCity(results[0]);
+  } else {
+    searchStatus.textContent = '⚠ City not found. Try a nearby major city or enter lat/lng.';
+    searchStatus.style.color = 'var(--solar)';
+  }
+}
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim();
+  if(q.length < 2) { clearSuggestions(); return; }
+  const results = searchCities(q);
+  showSuggestions(results);
+});
+
+searchInput.addEventListener('keydown', e => {
+  if(e.key === 'Enter') { geocodeAddress(searchInput.value.trim()); clearSuggestions(); }
+  if(e.key === 'Escape') clearSuggestions();
+});
+
+searchInput.addEventListener('blur', () => setTimeout(clearSuggestions, 150));
 
 document.getElementById('date-input').addEventListener('change',e=>{
   state.date=new Date(e.target.value+'T00:00:00Z');
